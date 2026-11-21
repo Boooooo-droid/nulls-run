@@ -6,8 +6,8 @@ Pick one of five Nulls, press PLAY, and run the rooftops until the ERASE glitch 
 
 ## Controls
 
-- **Jump / vault / climb:** tap, click, Space, or Up
-- **Slide:** swipe down, or Down / S
+- **Jump / vault / flip / climb:** swipe up, tap, click, Space, or Up. Swipe up again in the air to flip. Long jumps auto-flip; hard landings roll.
+- **Slide:** swipe down, or Down / S. Swipe down as you land to go straight into a slide.
 - **Pause:** P or Esc
 
 ## Characters

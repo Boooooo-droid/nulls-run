@@ -8,11 +8,11 @@
   const PX_M = 36;
 
   const CHARS = [
-    { id: 0, file: "assets/char1.png", name: "LEGION DRAGON", short: "LEGION", accent: "#4aa3ff", waist: 0.56 },
-    { id: 1, file: "assets/char2.png", name: "BASE NULL", short: "BASE", accent: "#f07a3a", waist: 0.52 },
-    { id: 2, file: "assets/char3.png", name: "GOGGLES", short: "GOGGLES", accent: "#f06aa0", waist: 0.50 },
-    { id: 3, file: "assets/char4.png", name: "RAINBOW VISOR", short: "RAINBOW", accent: "#b8e04a", waist: 0.52 },
-    { id: 4, file: "assets/char5.png", name: "HEADPHONES", short: "HEADPHONES", accent: "#4d7cff", waist: 0.50 },
+    { id: 0, file: "assets/char1.png", name: "LEGION DRAGON", short: "LEGION", accent: "#4aa3ff", waist: 0.54, knee: 0.50, armAmp: 0.65, gun: false, pocket: false, tail: true },
+    { id: 1, file: "assets/char2.png", name: "BASE NULL", short: "BASE", accent: "#f07a3a", waist: 0.50, knee: 0.50, armAmp: 0.75, gun: false, pocket: false, tail: false },
+    { id: 2, file: "assets/char3.png", name: "GOGGLES", short: "GOGGLES", accent: "#f06aa0", waist: 0.50, knee: 0.50, armAmp: 0.45, gun: true, pocket: false, tail: false },
+    { id: 3, file: "assets/char4.png", name: "RAINBOW VISOR", short: "RAINBOW", accent: "#b8e04a", waist: 0.50, knee: 0.50, armAmp: 0.35, gun: false, pocket: true, tail: false },
+    { id: 4, file: "assets/char5.png", name: "HEADPHONES", short: "HEADPHONES", accent: "#4d7cff", waist: 0.50, knee: 0.50, armAmp: 0.50, gun: true, pocket: false, tail: false },
   ];
 
   const ASSET_URLS = [
@@ -39,7 +39,10 @@
   const JUMP_V = 990;
   const SLIDE_T = 0.50;
   const VAULT_T = 0.36;
-  const CLIMB_T = 0.34;
+  const SPEED_VAULT_T = 0.32;
+  const KONG_T = 0.44;
+  const CLIMB_T = 0.42;
+  const ROLL_T = 0.40;
   const STUMBLE_T = 0.46;
   const COYOTE = 0.10;
   const JUMP_BUF = 0.13;
@@ -48,7 +51,7 @@
   const HIT_W = 44;
   const HIT_H = 108;
   const SLIDE_H = 46;
-  const DRAW_H = 152;
+  const DRAW_H0 = 168;
 
   const $ = (id) => document.getElementById(id);
   const canvas = $("cv");
@@ -135,7 +138,10 @@
     },
     slide: () => noiseBurst(0.18, 0.12, 400),
     vault: () => beep(520, 0.16, "square", 0.15, 820),
+    kong: () => { beep(400, 0.12, "square", 0.14, 700); beep(640, 0.16, "square", 0.12, 980); },
     climb: () => beep(300, 0.2, "triangle", 0.16, 520),
+    roll: () => { noiseBurst(0.22, 0.14, 280); beep(140, 0.16, "triangle", 0.14, 70); },
+    flip: () => { beep(480, 0.1, "square", 0.1, 860); noiseBurst(0.12, 0.08, 800); },
     collect: () => {
       beep(880, 0.08, "square", 0.14);
       setTimeout(() => beep(1320, 0.1, "square", 0.12), 50);
@@ -279,6 +285,9 @@
         if (dy > 36 && !swiped) {
           swiped = true;
           slideTap = true;
+        } else if (dy < -36 && !swiped) {
+          swiped = true;
+          jumpTap = true;
         }
       },
       { passive: true }
@@ -595,8 +604,13 @@
       phase: 0,
       face: 1,
       vaultH: 0,
+      vaultT: SPEED_VAULT_T,
       climbTo: 0,
       stumbleLock: 0,
+      flip: false,
+      spin: 0,
+      fullJump: false,
+      landVy: 0,
     };
   }
 
@@ -617,6 +631,9 @@
     playedName = CHARS[selected].name;
     resetWorld();
     parts.length = 0;
+    camXP = 0;
+    camYOff = 0;
+    camReady = false;
     show("play");
     $("hBest").textContent = String(best);
     $("hFrags").textContent = "0";
@@ -730,7 +747,9 @@
   }
 
   function standH() {
-    return player.state === "slide" ? SLIDE_H : HIT_H;
+    if (player.state === "slide") return SLIDE_H;
+    if (player.state === "roll") return 62;
+    return HIT_H;
   }
 
   function stepPlayer(dt) {
@@ -748,7 +767,10 @@
     score += spd * dt * 0.28;
     p.inv = Math.max(0, p.inv - dt);
     p.st += dt;
-    p.phase += dt * (spd / 70);
+    p.phase += dt * (spd / 82);
+    if (p.flip && (p.state === "jump" || p.state === "fall")) {
+      p.spin += dt * Math.PI * 3.2;
+    }
 
     const jumpNow = wantJump();
     if (jumpNow) p.buf = JUMP_BUF;
@@ -757,6 +779,8 @@
 
     if (p.onGround) p.coyote = COYOTE;
     else p.coyote = Math.max(0, p.coyote - dt);
+
+    const busy = p.state === "vault" || p.state === "kong" || p.state === "climb" || p.state === "stumble" || p.state === "slide" || p.state === "roll";
 
     // start slide
     if (wantSlide() && p.onGround && p.state === "run") {
@@ -771,15 +795,24 @@
         p.st = 0;
       }
     }
+    if (p.state === "roll" && p.st >= ROLL_T) {
+      p.state = "run";
+      p.st = 0;
+      p.flip = false;
+      p.spin = 0;
+    }
 
     // jump
-    if (p.buf > 0 && p.coyote > 0 && p.state !== "vault" && p.state !== "climb" && p.state !== "stumble" && p.state !== "slide") {
+    if (p.buf > 0 && p.coyote > 0 && !busy) {
       p.vy = JUMP_V;
       p.onGround = false;
       p.state = "jump";
       p.st = 0;
       p.buf = 0;
       p.coyote = 0;
+      p.flip = false;
+      p.spin = 0;
+      p.fullJump = true;
       consumeJump();
       sfx.jump();
     } else if (p.buf > 0 && p.state === "slide" && p.onGround) {
@@ -789,24 +822,43 @@
       p.state = "jump";
       p.st = 0;
       p.buf = 0;
+      p.flip = false;
+      p.spin = 0;
+      p.fullJump = true;
       consumeJump();
       sfx.jump();
+    } else if (!p.onGround && p.buf > 0 && (p.state === "jump" || p.state === "fall") && p.st > 0.08 && !p.flip) {
+      p.flip = true;
+      p.spin = 0;
+      p.buf = 0;
+      consumeJump();
+      sfx.flip();
+    }
+    if (p.state === "jump" && p.st > 0.34 && !p.flip && p.fullJump) {
+      p.flip = true;
+      p.spin = 0;
+      sfx.flip();
     }
 
     // variable jump cut
     if (p.state === "jump" && p.vy > 0 && !jumpHeld && !keys.Space && !keys.ArrowUp && !keys.KeyW) {
       p.vy *= 0.5;
       p.state = "fall";
+      p.fullJump = false;
     }
 
-    if (p.state === "vault") {
-      const t = Math.min(1, p.st / VAULT_T);
-      p.y = p.vaultFrom + Math.sin(t * Math.PI) * (p.vaultH + 36);
+    if (p.state === "vault" || p.state === "kong") {
+      const T = p.vaultT || (p.state === "kong" ? KONG_T : SPEED_VAULT_T);
+      const t = Math.min(1, p.st / T);
+      const lift = p.state === "kong" ? p.vaultH + 52 : p.vaultH + 36;
+      p.y = p.vaultFrom + Math.sin(t * Math.PI) * lift;
       if (t >= 1) {
         p.state = "run";
         p.vy = 0;
         p.onGround = true;
         p.y = p.vaultFrom;
+        p.flip = false;
+        p.spin = 0;
       }
     } else if (p.state === "climb") {
       const t = Math.min(1, p.st / CLIMB_T);
@@ -818,7 +870,7 @@
         p.state = "run";
       }
     } else if (p.state !== "slide" || !p.onGround) {
-      if (!p.onGround && p.state !== "vault" && p.state !== "climb") {
+      if (!p.onGround && p.state !== "vault" && p.state !== "kong" && p.state !== "climb") {
         p.vy -= GRAV * dt;
         p.y += p.vy * dt;
         if (p.vy < 0 && p.state === "jump") p.state = "fall";
@@ -826,29 +878,50 @@
     }
 
     // ground / ledges
-    if (p.state !== "vault" && p.state !== "climb") {
+    if (p.state !== "vault" && p.state !== "kong" && p.state !== "climb") {
       const r = highestRoofBelow(p.x + 10, p.y + (p.vy < 0 ? 24 : 4));
       if (r && p.y <= r.h + 4 && (p.onGround || p.vy <= 0)) {
         if (!p.onGround && p.y + 18 >= r.h) {
+          const wasAir = !p.onGround;
+          const impact = p.vy;
           p.y = r.h;
           p.vy = 0;
-          if (!p.onGround) {
-            sfx.land();
+          if (wasAir) {
             dust(p.x, r.h);
+            if (wantSlide() && p.state !== "roll") {
+              p.state = "slide";
+              p.st = 0;
+              p.flip = false;
+              p.spin = 0;
+              consumeSlide();
+              sfx.slide();
+            } else if ((p.flip || impact < -520) && p.state !== "slide") {
+              p.state = "roll";
+              p.st = 0;
+              p.flip = false;
+              p.inv = Math.max(p.inv, 0.28);
+              sfx.roll();
+            } else {
+              sfx.land();
+              if (p.state === "fall" || p.state === "jump") {
+                p.state = "run";
+                p.flip = false;
+                p.spin = 0;
+              }
+            }
           }
           p.onGround = true;
-          if (p.state === "fall" || p.state === "jump") p.state = "run";
         } else if (p.onGround && Math.abs(p.y - r.h) < 20) {
           p.y = r.h;
         }
       } else if (p.onGround) {
         p.onGround = false;
-        if (p.state === "run" || p.state === "slide") p.state = "fall";
+        if (p.state === "run" || p.state === "slide" || p.state === "roll") p.state = "fall";
       }
     }
 
     // ledge grab
-    if (!p.onGround && p.state !== "vault" && p.state !== "climb" && p.state !== "stumble" && p.vy < 220) {
+    if (!p.onGround && p.state !== "vault" && p.state !== "kong" && p.state !== "climb" && p.state !== "stumble" && p.state !== "roll" && p.vy < 220) {
       for (let i = 0; i < roofs.length; i++) {
         const r = roofs[i];
         const lip = r.x;
@@ -938,21 +1011,26 @@
 
   function startVault(o) {
     const p = player;
-    p.state = "vault";
+    const kong = o.h > 50;
+    p.state = kong ? "kong" : "vault";
     p.st = 0;
     p.vaultFrom = o.base;
     p.vaultH = o.h;
+    p.vaultT = kong ? KONG_T : SPEED_VAULT_T;
     p.onGround = false;
     p.vy = 0;
     p.y = o.base;
-    o.hit = "vault";
+    p.flip = false;
+    p.spin = 0;
+    o.hit = kong ? "kong" : "vault";
     consumeJump();
-    sfx.vault();
+    if (kong) sfx.kong();
+    else sfx.vault();
   }
 
   function hitObstacle(o) {
     const p = player;
-    if (p.inv > 0 || p.state === "vault" || p.state === "climb") return;
+    if (p.inv > 0 || p.state === "vault" || p.state === "kong" || p.state === "climb" || p.state === "roll") return;
     o.hit = true;
     // mid/hard hits close the virus more
     const hard = o.mode !== "low";
@@ -995,6 +1073,7 @@
 
   /* ---------------- renderer ---------------- */
   let vw = 1600, vh = 900, dpr = 1;
+  let camXP = 0, camYOff = 0, camReady = false;
   function resize() {
     dpr = Math.min(2.25, window.devicePixelRatio || 1);
     vw = window.innerWidth;
@@ -1007,11 +1086,29 @@
   }
   window.addEventListener("resize", resize);
 
+  function drawHNow() {
+    return Math.round(Math.max(DRAW_H0, Math.min(200, vh * 0.20)));
+  }
   function groundY() {
-    return vh * 0.78;
+    return vh * 0.78 + camYOff;
+  }
+  function stepCam(dt) {
+    if (!player) return;
+    const lead = Math.min(180, Math.max(0, (speed - SPEED0) * 0.22));
+    const target = player.x - vw * 0.27 + lead;
+    const yTarget = Math.max(-48, Math.min(80, -player.y * 0.22));
+    if (!camReady) {
+      camXP = target;
+      camYOff = yTarget;
+      camReady = true;
+      return;
+    }
+    const k = 1 - Math.pow(0.0003, Math.max(0.001, dt));
+    camXP += (target - camXP) * k;
+    camYOff += (yTarget - camYOff) * k;
   }
   function camX() {
-    return player ? player.x - vw * 0.27 : 0;
+    return player ? camXP : 0;
   }
   function sx(wx) {
     return wx - camX();
@@ -1404,18 +1501,667 @@
     }
   }
 
+  /* ---------------- articulated rig (Vector-like run from stills) ---------------- */
+  const RIG_LEAN = 0.16;
+  const RIG_STRIDE = 0.70;
+  const RIG_KNEE_SWING = 1.25;
+  const RIG_KNEE_STANCE = 0.18;
+  const RIG_BOB = 7;
+  const rigs = [null, null, null, null, null];
+
+  function makeCnv(w, h) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, w | 0);
+    c.height = Math.max(1, h | 0);
+    return c;
+  }
+
+  function runsOf(row, minlen) {
+    const out = [];
+    let inr = false, s = 0;
+    for (let i = 0; i < row.length; i++) {
+      if (row[i] && !inr) { s = i; inr = true; }
+      else if (!row[i] && inr) {
+        if (i - s >= minlen) out.push([s, i - 1]);
+        inr = false;
+      }
+    }
+    if (inr && row.length - s >= minlen) out.push([s, row.length - 1]);
+    return out;
+  }
+
+  function connectedComponents(mask, w, h) {
+    const lab = new Int32Array(w * h);
+    const stats = [];
+    let id = 0;
+    const qx = new Int32Array(w * h);
+    const qy = new Int32Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i0 = y * w + x;
+        if (!mask[i0] || lab[i0]) continue;
+        id++;
+        let qh = 0, qt = 0;
+        qx[qt] = x; qy[qt] = y; qt++;
+        lab[i0] = id;
+        let area = 0, x0 = x, x1 = x, y0 = y, y1 = y, sx = 0, sy = 0;
+        while (qh < qt) {
+          const cx = qx[qh], cy = qy[qh];
+          qh++;
+          area++; sx += cx; sy += cy;
+          if (cx < x0) x0 = cx; if (cx > x1) x1 = cx;
+          if (cy < y0) y0 = cy; if (cy > y1) y1 = cy;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              if (!dx && !dy) continue;
+              const nx = cx + dx, ny = cy + dy;
+              if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+              const ni = ny * w + nx;
+              if (mask[ni] && !lab[ni]) { lab[ni] = id; qx[qt] = nx; qy[qt] = ny; qt++; }
+            }
+          }
+        }
+        stats[id] = { id, area, left: x0, top: y0, right: x1, bottom: y1, cx: sx / area, cy: sy / area };
+      }
+    }
+    return { n: id, lab, stats };
+  }
+
+  function floodFrom(seed, allowed) {
+    const n = seed.length;
+    const out = new Uint8Array(n);
+    // figure w/h from allowed length — caller uses same size
+    return out;
+  }
+
+  function growMask(seed, region, w, h) {
+    const out = new Uint8Array(w * h);
+    const qx = new Int32Array(w * h);
+    const qy = new Int32Array(w * h);
+    let qt = 0;
+    for (let i = 0; i < seed.length; i++) {
+      if (seed[i] && region[i]) {
+        out[i] = 1;
+        qx[qt] = i % w; qy[qt] = (i / w) | 0; qt++;
+      }
+    }
+    let qh = 0;
+    while (qh < qt) {
+      const cx = qx[qh], cy = qy[qh]; qh++;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const ni = ny * w + nx;
+          if (!out[ni] && region[ni]) { out[ni] = 1; qx[qt] = nx; qy[qt] = ny; qt++; }
+        }
+      }
+    }
+    return out;
+  }
+
+  function copyMaskedCanvas(srcData, w, h, mask) {
+    const c = makeCnv(w, h);
+    const ictx = c.getContext("2d");
+    const out = ictx.createImageData(w, h);
+    const s = srcData.data, d = out.data;
+    for (let i = 0; i < mask.length; i++) {
+      if (!mask[i]) continue;
+      const j = i * 4;
+      d[j] = s[j]; d[j + 1] = s[j + 1]; d[j + 2] = s[j + 2]; d[j + 3] = s[j + 3];
+    }
+    ictx.putImageData(out, 0, 0);
+    return c;
+  }
+
+  function cropPack(full, pivotX, pivotY) {
+    const w = full.width, h = full.height;
+    const data = full.getContext("2d").getImageData(0, 0, w, h).data;
+    let x0 = w, y0 = h, x1 = 0, y1 = 0, any = false;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (data[(y * w + x) * 4 + 3] > 15) {
+          any = true;
+          if (x < x0) x0 = x; if (x > x1) x1 = x;
+          if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+    }
+    if (!any) return null;
+    const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+    const c = makeCnv(cw, ch);
+    c.getContext("2d").drawImage(full, x0, y0, cw, ch, 0, 0, cw, ch);
+    return { canvas: c, px: pivotX - x0, py: pivotY - y0, x: x0, y: y0, w: cw, h: ch };
+  }
+
+  function buildRig(img, meta) {
+    if (!img || !img.width) return null;
+    const w = img.width, h = img.height;
+    const srcC = makeCnv(w, h);
+    const sctx = srcC.getContext("2d");
+    sctx.drawImage(img, 0, 0);
+    const srcData = sctx.getImageData(0, 0, w, h);
+    const a = new Uint8Array(w * h);
+    const d = srcData.data;
+    for (let i = 0; i < a.length; i++) a[i] = d[i * 4 + 3];
+
+    let x0 = w, y0 = h, x1 = 0, y1 = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (a[y * w + x] > 20) {
+          if (x < x0) x0 = x; if (x > x1) x1 = x;
+          if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+    }
+    if (x1 <= x0) return null;
+    const bh = y1 - y0 + 1, bw = x1 - x0 + 1;
+    const hipY = (y0 + bh * (meta.waist || 0.5)) | 0;
+    const ankleY = y1 - 6;
+    const kneeY = (hipY + (ankleY - hipY) * (meta.knee || 0.5)) | 0;
+
+    const fy0 = y0 + ((bh * 0.88) | 0);
+    const feetMask = new Uint8Array(w * (y1 - fy0 + 1));
+    const fh = y1 - fy0 + 1;
+    for (let y = fy0; y <= y1; y++) {
+      for (let x = 0; x < w; x++) {
+        if (a[y * w + x] > 40) feetMask[(y - fy0) * w + x] = 1;
+      }
+    }
+    const cc = connectedComponents(feetMask, w, fh);
+    const comps = [];
+    for (let k = 1; k <= cc.n; k++) if (cc.stats[k].area > 400) comps.push(cc.stats[k]);
+    comps.sort((p, q) => q.area - p.area);
+    const feet = comps.slice(0, 2).sort((p, q) => p.cx - q.cx);
+    let footCx = [x0 + bw * 0.32, x0 + bw * 0.68];
+    let footCy = [y1 - 20, y1 - 20];
+    if (feet.length >= 2) {
+      footCx = [feet[0].cx, feet[1].cx];
+      footCy = [feet[0].cy + fy0, feet[1].cy + fy0];
+    }
+
+    const split = new Float32Array(h);
+    let prev = (footCx[0] + footCx[1]) / 2;
+    const leftB = Math.min(footCx[0], footCx[1]) + 16;
+    const rightB = Math.max(footCx[0], footCx[1]) - 16;
+    let lastGapY = y1;
+    for (let y = y1; y >= hipY; y--) {
+      const row = new Uint8Array(w);
+      for (let x = 0; x < w; x++) row[x] = a[y * w + x] > 40 ? 1 : 0;
+      const rs = runsOf(row, 8);
+      if (rs.length >= 2) {
+        let best = null, bd = 1e9;
+        for (let i = 0; i < rs.length - 1; i++) {
+          const mid = (rs[i][1] + rs[i + 1][0]) / 2;
+          const gw = rs[i + 1][0] - rs[i][1];
+          if (mid < leftB || mid > rightB || gw < 4) continue;
+          const dist = Math.abs(mid - prev);
+          if (dist < bd) { bd = dist; best = mid; }
+        }
+        if (best != null) { prev = prev * 0.2 + best * 0.8; lastGapY = y; }
+      }
+      split[y] = prev;
+    }
+    const mid0 = (y0 + bh * 0.88) | 0, mid1 = (y0 + bh * 0.96) | 0;
+    const band = [];
+    for (let y = mid0; y <= Math.min(y1, mid1); y++) band.push(split[y]);
+    band.sort((p, q) => p - q);
+    const crotchX = band.length ? band[band.length >> 1] : prev;
+    for (let y = hipY - 6; y <= lastGapY; y++) {
+      if (y < 0 || y >= h) continue;
+      split[y] = y > lastGapY - 20 ? crotchX * 0.7 + split[y] * 0.3 : crotchX;
+    }
+
+    const hipSpread = Math.max(18, bw * 0.08);
+    const hipL = [crotchX - hipSpread, hipY];
+    const hipR = [crotchX + hipSpread, hipY];
+
+    const maskL = new Uint8Array(w * h);
+    const maskR = new Uint8Array(w * h);
+    const seam = 10;
+    for (let y = hipY - 6; y <= y1; y++) {
+      if (y < 0) continue;
+      const sx = y >= hipY ? split[y] : split[hipY];
+      const li = Math.max(0, Math.min(w, (sx + seam) | 0));
+      const ri = Math.max(0, Math.min(w, (sx - seam) | 0));
+      const row = y * w;
+      for (let x = 0; x < li; x++) if (a[row + x] > 20) maskL[row + x] = 1;
+      for (let x = ri; x < w; x++) if (a[row + x] > 20) maskR[row + x] = 1;
+    }
+
+    let tailMask = null;
+    if (meta.tail && feet.length >= 1) {
+      const leftFootLeft = feet[0].left;
+      tailMask = new Uint8Array(w * h);
+      const seed = new Uint8Array(w * h);
+      for (let y = Math.max(0, hipY - 40); y <= y1; y++) {
+        for (let x = 0; x < Math.max(0, leftFootLeft - 2); x++) {
+          if (a[y * w + x] > 40) seed[y * w + x] = 1;
+        }
+      }
+      const region = new Uint8Array(w * h);
+      for (let i = 0; i < region.length; i++) region[i] = a[i] > 40 ? 1 : 0;
+      tailMask = growMask(seed, region, w, h);
+      for (let i = 0; i < tailMask.length; i++) if (tailMask[i]) { maskL[i] = 0; maskR[i] = 0; }
+    }
+
+    function splitKnee(legMask, hip) {
+      const thighMask = new Uint8Array(w * h);
+      const shinMask = new Uint8Array(w * h);
+      const overlap = 14;
+      const t0 = Math.max(0, hipY - 16), t1 = Math.min(h, kneeY + overlap);
+      const s0 = Math.max(0, kneeY - overlap);
+      for (let y = t0; y < t1; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          if (legMask[i] && a[i] > 20) thighMask[i] = 1;
+        }
+      }
+      for (let y = s0; y <= y1; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          if (legMask[i] && a[i] > 20) shinMask[i] = 1;
+        }
+      }
+      const fyA = Math.max(0, ankleY - 80), fyB = Math.min(h - 1, ankleY);
+      let sx = 0, sy = 0, n = 0;
+      for (let y = fyA; y <= fyB; y++) {
+        for (let x = 0; x < w; x++) {
+          if (legMask[y * w + x] && a[y * w + x] > 40) { sx += x; sy += y; n++; }
+        }
+      }
+      const fcx = n ? sx / n : hip[0];
+      const fcy = n ? sy / n : ankleY;
+      const t = (kneeY - hip[1]) / Math.max(1, fcy - hip[1]);
+      const knx = hip[0] + (fcx - hip[0]) * t;
+      const kny = kneeY;
+      return {
+        thigh: copyMaskedCanvas(srcData, w, h, thighMask),
+        shin: copyMaskedCanvas(srcData, w, h, shinMask),
+        hip, knee: [knx, kny], foot: [fcx, fcy],
+        restHip: Math.atan2(fcx - hip[0], fcy - hip[1]),
+        restShin: Math.atan2(fcx - knx, fcy - kny),
+      };
+    }
+
+    const left = splitKnee(maskL, hipL);
+    const right = splitKnee(maskR, hipR);
+
+    const torsoMask = new Uint8Array(w * h);
+    for (let y = 0; y < Math.min(h, hipY + 18); y++) {
+      for (let x = 0; x < w; x++) if (a[y * w + x] > 20) torsoMask[y * w + x] = 1;
+    }
+    if (tailMask) for (let i = 0; i < tailMask.length; i++) if (tailMask[i]) torsoMask[i] = 0;
+
+    // chest core from a few rows
+    const cores = [];
+    let headCx = (x0 + x1) / 2;
+    const headY = (y0 + bh * 0.16) | 0;
+    {
+      const row = new Uint8Array(w);
+      for (let x = 0; x < w; x++) row[x] = a[headY * w + x] > 40 ? 1 : 0;
+      const hrs = runsOf(row, 10);
+      if (hrs.length) headCx = (hrs[0][0] + hrs[0][1]) / 2;
+    }
+    [0.30, 0.33, 0.36, 0.39].forEach((frac) => {
+      const y = (y0 + bh * frac) | 0;
+      const row = new Uint8Array(w);
+      for (let x = 0; x < w; x++) row[x] = a[y * w + x] > 40 ? 1 : 0;
+      const rs = runsOf(row, 10);
+      if (!rs.length) return;
+      let run = rs[0], bd = 1e9;
+      for (const r of rs) {
+        const dist = Math.abs((r[0] + r[1]) / 2 - headCx);
+        if (dist < bd) { bd = dist; run = r; }
+      }
+      cores.push(run);
+    });
+    let coreL = (x0 + bw * 0.28) | 0, coreR = (x0 + bw * 0.72) | 0;
+    if (cores.length) {
+      cores.sort((p, q) => p[0] - q[0]);
+      coreL = cores[(cores.length >> 1)][0];
+      cores.sort((p, q) => p[1] - q[1]);
+      coreR = cores[(cores.length >> 1)][1];
+    }
+    const pad = (bw * 0.12) | 0;
+    coreL = Math.max(0, coreL - pad);
+    coreR = Math.min(w - 1, coreR + pad);
+
+    const shoulderY = (y0 + bh * 0.30) | 0;
+    const armLo = hipY + 8;
+    let armLMask = new Uint8Array(w * h);
+    let armRMask = new Uint8Array(w * h);
+    for (let y = shoulderY; y < Math.min(h, armLo); y++) {
+      for (let x = 0; x < coreL; x++) if (a[y * w + x] > 20) armLMask[y * w + x] = 1;
+      for (let x = coreR + 1; x < w; x++) if (a[y * w + x] > 20) armRMask[y * w + x] = 1;
+    }
+    const regionArm = new Uint8Array(w * h);
+    const maxArmY = Math.min(h - 1, hipY + ((bh * 0.22) | 0));
+    for (let y = shoulderY; y <= maxArmY; y++) {
+      for (let x = 0; x < w; x++) if (a[y * w + x] > 20) regionArm[y * w + x] = 1;
+    }
+    armLMask = growMask(armLMask, regionArm, w, h);
+    armRMask = growMask(armRMask, regionArm, w, h);
+
+    if (meta.gun) {
+      const raised = new Uint8Array(w * h);
+      const top = (y0 + bh * 0.08) | 0;
+      const cut = ((coreL + headCx) / 2) | 0;
+      for (let y = top; y <= shoulderY + 4; y++) {
+        for (let x = 0; x < cut; x++) if (a[y * w + x] > 20) raised[y * w + x] = 1;
+      }
+      const rgn = new Uint8Array(w * h);
+      for (let y = top; y <= hipY; y++) {
+        for (let x = 0; x < w; x++) if (a[y * w + x] > 20) rgn[y * w + x] = 1;
+      }
+      const grown = growMask(raised, rgn, w, h);
+      for (let i = 0; i < grown.length; i++) if (grown[i]) armLMask[i] = 1;
+    }
+
+    for (let i = 0; i < torsoMask.length; i++) {
+      if (armLMask[i] || armRMask[i]) torsoMask[i] = 0;
+    }
+    for (let y = shoulderY; y < hipY + 8 && y < h; y++) {
+      for (let x = coreL; x < coreR; x++) if (a[y * w + x] > 20) torsoMask[y * w + x] = 1;
+    }
+
+    function firstMass(mask, yA, yB, xA, xB) {
+      let sx = 0, sy = 0, n = 0;
+      for (let y = yA; y < yB; y++) {
+        for (let x = xA; x < xB; x++) {
+          if (mask[y * w + x]) { sx += x; sy += y; n++; }
+        }
+      }
+      return n ? [sx / n, sy / n] : null;
+    }
+    let shL = firstMass(armLMask, shoulderY, shoulderY + ((bh * 0.10) | 0), 0, coreL + 8);
+    let shR = firstMass(armRMask, shoulderY, shoulderY + ((bh * 0.10) | 0), Math.max(0, coreR - 8), w);
+    if (!shL) shL = [coreL, shoulderY + 10];
+    if (!shR) shR = [coreR, shoulderY + 10];
+
+    function armRest(mask, sh) {
+      const xs = [], ys = [];
+      for (let i = 0; i < mask.length; i++) if (mask[i]) { xs.push(i % w); ys.push((i / w) | 0); }
+      if (!xs.length) return { hand: [sh[0], sh[1] + 80], ang: 0 };
+      const sorted = ys.slice().sort((p, q) => p - q);
+      const ycut = sorted[(sorted.length * 0.88) | 0];
+      let sx = 0, sy = 0, n = 0;
+      for (let i = 0; i < xs.length; i++) if (ys[i] >= ycut) { sx += xs[i]; sy += ys[i]; n++; }
+      const hx = sx / n, hy = sy / n;
+      return { hand: [hx, hy], ang: Math.atan2(hx - sh[0], hy - sh[1]) };
+    }
+    const restL = armRest(armLMask, shL);
+    const restR = armRest(armRMask, shR);
+
+    const capMask = new Uint8Array(w * h);
+    for (let y = Math.max(0, hipY - 10); y < Math.min(h, hipY + 28); y++) {
+      for (let x = 0; x < w; x++) if (a[y * w + x] > 20) capMask[y * w + x] = 1;
+    }
+    if (tailMask) for (let i = 0; i < tailMask.length; i++) if (tailMask[i]) capMask[i] = 0;
+
+    const tailPivot = [crotchX - 8, hipY + 6];
+    const torsoC = copyMaskedCanvas(srcData, w, h, torsoMask);
+    const capC = copyMaskedCanvas(srcData, w, h, capMask);
+    const armLC = copyMaskedCanvas(srcData, w, h, armLMask);
+    const armRC = copyMaskedCanvas(srcData, w, h, armRMask);
+    const tailC = tailMask ? copyMaskedCanvas(srcData, w, h, tailMask) : null;
+
+    return {
+      meta, w, h, hipY, kneeY, crotchX,
+      legL: left, legR: right,
+      torso: cropPack(torsoC, crotchX, hipY),
+      hipcap: cropPack(capC, crotchX, hipY),
+      thighL: cropPack(left.thigh, left.hip[0], left.hip[1]),
+      shinL: cropPack(left.shin, left.knee[0], left.knee[1]),
+      thighR: cropPack(right.thigh, right.hip[0], right.hip[1]),
+      shinR: cropPack(right.shin, right.knee[0], right.knee[1]),
+      armL: cropPack(armLC, shL[0], shL[1]),
+      armR: cropPack(armRC, shR[0], shR[1]),
+      tail: tailC ? cropPack(tailC, tailPivot[0], tailPivot[1]) : null,
+      shL, shR, restAL: restL.ang, restAR: restR.ang, tailPivot,
+    };
+  }
+
+  function buildAllRigs() {
+    for (let i = 0; i < CHARS.length; i++) {
+      try {
+        rigs[i] = buildRig(images[CHARS[i].file], CHARS[i]);
+      } catch (err) {
+        console.warn("rig failed", i, err);
+        rigs[i] = null;
+      }
+    }
+  }
+
+  function poseRun(ph, lean) {
+    lean = lean == null ? RIG_LEAN : lean;
+    function leg(offset) {
+      const p = ph + offset;
+      const hipA = lean + RIG_STRIDE * Math.cos(p);
+      const swing = Math.max(0, -Math.sin(p));
+      const support = Math.max(0, Math.sin(p));
+      const kneeA = RIG_KNEE_STANCE + RIG_KNEE_SWING * Math.pow(swing, 1.15);
+      return { hipA, kneeA, swing, support };
+    }
+    function arm(offset) {
+      return lean * 0.4 - 1 * Math.cos(ph + offset);
+    }
+    return {
+      bob: (1 - Math.abs(Math.sin(ph))) * RIG_BOB,
+      lean,
+      bodySpin: 0,
+      L: leg(Math.PI),
+      R: leg(0),
+      armL: arm(Math.PI),
+      armR: arm(0),
+      tail: 0.25 * Math.sin(ph + 0.4),
+    };
+  }
+
+  function poseFromState(p) {
+    const ph = p.phase;
+    const st = p.st;
+    if (p.state === "run") return poseRun(ph);
+    if (p.state === "stumble") {
+      const pose = poseRun(ph, RIG_LEAN * 0.5);
+      pose.lean += Math.sin(st * 28) * 0.2;
+      pose.bodySpin = Math.sin(st * 28) * 0.14;
+      return pose;
+    }
+    if (p.state === "dead") {
+      const pose = poseRun(0.4, 0.05);
+      pose.bodySpin = Math.min(1.15, 0.3 + st * 1.4);
+      pose.L.kneeA = 0.8; pose.R.kneeA = 1.0;
+      pose.bob = -8;
+      return pose;
+    }
+    if (p.state === "slide") {
+      return {
+        bob: 0,
+        lean: 0.15,
+        bodySpin: 1.22,
+        L: { hipA: 0.85, kneeA: 0.15, swing: 0, support: 1 },
+        R: { hipA: -0.15, kneeA: 1.35, swing: 1, support: 0 },
+        armL: 0.9, armR: -0.4, tail: 0.3,
+      };
+    }
+    if (p.state === "roll") {
+      const k = Math.min(1, st / ROLL_T);
+      return {
+        bob: 8 * Math.sin(k * Math.PI),
+        lean: 0.1,
+        bodySpin: 0.4 + k * Math.PI * 2,
+        L: { hipA: 0.7, kneeA: 1.4, swing: 1, support: 0 },
+        R: { hipA: -0.2, kneeA: 1.5, swing: 1, support: 0 },
+        armL: 0.8, armR: -0.6, tail: 0.2,
+      };
+    }
+    if (p.state === "vault") {
+      const k = Math.min(1, st / (p.vaultT || SPEED_VAULT_T));
+      // speed vault: one hand plant, legs scissor over
+      return {
+        bob: 6,
+        lean: 0.2,
+        bodySpin: 0.55 - k * 0.25,
+        L: { hipA: -0.2 + k * 1.1, kneeA: 0.5 + (1 - k) * 0.4, swing: 1, support: 0 },
+        R: { hipA: 0.9 - k * 1.2, kneeA: 0.4, swing: 1, support: 0 },
+        armL: 1.1 - k * 0.6, armR: -0.3, tail: 0.2,
+      };
+    }
+    if (p.state === "kong") {
+      const k = Math.min(1, st / (p.vaultT || KONG_T));
+      const dive = Math.sin(k * Math.PI);
+      return {
+        bob: 4,
+        lean: 0.1,
+        bodySpin: 0.25 + dive * 1.05,
+        L: { hipA: -0.5 + k * 1.5, kneeA: 1.1 - k * 0.6, swing: 1, support: 0 },
+        R: { hipA: -0.3 + k * 1.4, kneeA: 1.0 - k * 0.5, swing: 1, support: 0 },
+        armL: 1.2, armR: 1.0, tail: 0.15,
+      };
+    }
+    if (p.state === "climb") {
+      const k = Math.min(1, st / CLIMB_T);
+      return {
+        bob: 0,
+        lean: 0.05,
+        bodySpin: -0.15 + Math.sin(k * Math.PI) * 0.2,
+        L: { hipA: 0.15 + (k < 0.6 ? 0.7 : 0.1), kneeA: k < 0.6 ? 1.2 : 0.3, swing: 1, support: 0 },
+        R: { hipA: 0.05, kneeA: 0.4, swing: 0, support: 1 },
+        armL: -1.2, armR: -1.0, tail: 0.1,
+      };
+    }
+    // jump / fall / flip
+    {
+      const rising = p.state === "jump" && p.vy > 0;
+      const kAir = Math.max(0, Math.min(1, st / 0.28));
+      const tuck = p.flip ? 1 : (rising ? Math.min(1, kAir * 0.6) : 0.25);
+      const spin = p.flip ? (p.spin || 0) : (rising ? -0.18 : 0.16);
+      const extend = rising && st < 0.08 ? 1 - st / 0.08 : 0;
+      return {
+        bob: 0,
+        lean: 0.12,
+        bodySpin: spin,
+        L: { hipA: 0.55 - extend * 0.3 + tuck * 0.4, kneeA: 0.25 + tuck * 1.2, swing: 1, support: 0 },
+        R: { hipA: -0.15 - extend * 0.4 - tuck * 0.1, kneeA: 0.2 + tuck * 1.15, swing: 1, support: 0 },
+        armL: -0.6 - extend * 0.4 + tuck * 0.8,
+        armR: 0.5 + extend * 0.3 - tuck * 0.2,
+        tail: 0.2,
+      };
+    }
+  }
+
+  function blitPart(g, part, px, py, angle, scale) {
+    if (!part || !part.canvas) return;
+    g.save();
+    g.translate(px, py);
+    g.rotate(angle);
+    g.drawImage(part.canvas, -part.px * scale, -part.py * scale, part.w * scale, part.h * scale);
+    g.restore();
+  }
+
+  function kneeDest(hip, hipA, restHip, kneeSrc, hipSrc, scale) {
+    const kx = kneeSrc[0] - hipSrc[0];
+    const ky = kneeSrc[1] - hipSrc[1];
+    const da = hipA - restHip;
+    const ca = Math.cos(da), sa = Math.sin(da);
+    return [hip[0] + (kx * ca - ky * sa) * scale, hip[1] + (kx * sa + ky * ca) * scale];
+  }
+
+  function footDest(kn, hipA, kneeA, leg, scale) {
+    const shinAbs = hipA + (leg.restShin - leg.restHip) - kneeA;
+    const fx = leg.foot[0] - leg.knee[0];
+    const fy = leg.foot[1] - leg.knee[1];
+    const db = shinAbs - leg.restShin;
+    const cb = Math.cos(db), sb = Math.sin(db);
+    return [kn[0] + (fx * cb - fy * sb) * scale, kn[1] + (fx * sb + fy * cb) * scale];
+  }
+
+  function drawArticulated(g, rig, pose, drawH) {
+    const scale = drawH / rig.h;
+    const footRest = Math.max(rig.legL.foot[1], rig.legR.foot[1]);
+    const legLen = (footRest - rig.hipY) * scale;
+    let hipX = 0;
+    let hipY = -legLen - pose.bob;
+    const crotchX = rig.crotchX;
+    const hipL = [hipX + (rig.legL.hip[0] - crotchX) * scale, hipY];
+    const hipR = [hipX + (rig.legR.hip[0] - crotchX) * scale, hipY];
+    const shL = [hipX + (rig.shL[0] - crotchX) * scale, hipY + (rig.shL[1] - rig.hipY) * scale];
+    const shR = [hipX + (rig.shR[0] - crotchX) * scale, hipY + (rig.shR[1] - rig.hipY) * scale];
+    const tailP = [hipX + (rig.tailPivot[0] - crotchX) * scale, hipY + (rig.tailPivot[1] - rig.hipY) * scale];
+    const kL = kneeDest(hipL, pose.L.hipA, rig.legL.restHip, rig.legL.knee, rig.legL.hip, scale);
+    const kR = kneeDest(hipR, pose.R.hipA, rig.legR.restHip, rig.legR.knee, rig.legR.hip, scale);
+
+    const shinAbsL = pose.L.hipA + (rig.legL.restShin - rig.legL.restHip) - pose.L.kneeA;
+    const shinAbsR = pose.R.hipA + (rig.legR.restShin - rig.legR.restHip) - pose.R.kneeA;
+    const thighAngL = pose.L.hipA - rig.legL.restHip;
+    const thighAngR = pose.R.hipA - rig.legR.restHip;
+    const shinAngL = shinAbsL - rig.legL.restShin;
+    const shinAngR = shinAbsR - rig.legR.restShin;
+
+    const amp = rig.meta.armAmp == null ? 0.6 : rig.meta.armAmp;
+    let armDrawL = pose.armL * amp - rig.restAL;
+    let armDrawR = pose.armR * amp - rig.restAR;
+    if (rig.meta.gun) armDrawL *= 0.45;
+    if (rig.meta.pocket) { armDrawL *= 0.4; armDrawR *= 0.4; }
+
+    // plant stance foot (or none during flight)
+    if (pose.L.support > 0.18 || pose.R.support > 0.18) {
+      const fL = footDest(kL, pose.L.hipA, pose.L.kneeA, rig.legL, scale);
+      const fR = footDest(kR, pose.R.hipA, pose.R.kneeA, rig.legR, scale);
+      let target = -1e9;
+      if (pose.L.support > 0.18) target = Math.max(target, fL[1]);
+      if (pose.R.support > 0.18) target = Math.max(target, fR[1]);
+      const dy = 0 - target; // ground is y=0
+      // shift all pivots
+      hipL[1] += dy; hipR[1] += dy; shL[1] += dy; shR[1] += dy; tailP[1] += dy;
+      kL[1] += dy; kR[1] += dy;
+      hipY += dy;
+    }
+
+    g.save();
+    g.rotate(pose.bodySpin || 0);
+    const leftBack = pose.L.hipA < pose.R.hipA;
+    const order = leftBack ? [-1, 1] : [1, -1];
+    if (rig.tail) blitPart(g, rig.tail, tailP[0], tailP[1], pose.tail, scale);
+    function drawLeg(side) {
+      if (side < 0) {
+        blitPart(g, rig.thighL, hipL[0], hipL[1], thighAngL, scale);
+        blitPart(g, rig.shinL, kL[0], kL[1], shinAngL, scale);
+      } else {
+        blitPart(g, rig.thighR, hipR[0], hipR[1], thighAngR, scale);
+        blitPart(g, rig.shinR, kR[0], kR[1], shinAngR, scale);
+      }
+    }
+    function drawArm(side) {
+      if (side < 0) blitPart(g, rig.armL, shL[0], shL[1], armDrawL, scale);
+      else blitPart(g, rig.armR, shR[0], shR[1], armDrawR, scale);
+    }
+    drawArm(order[0]);
+    drawLeg(order[0]);
+    blitPart(g, rig.hipcap, hipX, hipY, pose.lean * 0.35, scale);
+    blitPart(g, rig.torso, hipX, hipY, pose.lean * 0.55, scale);
+    drawLeg(order[1]);
+    drawArm(order[1]);
+    g.restore();
+  }
+
+
   function drawPlayer(gY, t) {
     const p = player;
     const x = sx(p.x);
     const feet = sy(p.y);
     const img = images[CHARS[selected].file];
-    const waist = CHARS[selected].waist;
+    const rig = rigs[selected];
+    const drawH = drawHNow();
+
     // shadow
     ctx.save();
     ctx.fillStyle = "rgba(0,0,0,.35)";
     ctx.beginPath();
-    const sw = p.state === "slide" ? 70 : 40;
-    ctx.ellipse(x, sy(highestRoofBelow(p.x, p.y + 40) ? highestRoofBelow(p.x, p.y + 40).h : p.y) + 2, sw, 8, 0, 0, Math.PI * 2);
+    const sw = p.state === "slide" || p.state === "roll" ? 70 : 40;
+    const shadY = sy((highestRoofBelow(p.x, p.y + 40) || { h: p.y }).h) + 2;
+    ctx.ellipse(x, shadY, sw, 8, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
@@ -1425,59 +2171,23 @@
       return;
     }
 
-    const ih = img.height,
-      iw = img.width;
-    const drawH = DRAW_H;
+    const iw = img.width, ih = img.height;
     const drawW = (iw / ih) * drawH;
 
     ctx.save();
     ctx.translate(x, feet);
-
-    if (p.state === "slide") {
-      ctx.translate(10, -18);
-      ctx.rotate(1.22);
-      ctx.scale(1.05, 0.68);
-      ctx.drawImage(img, -drawW * 0.45, -drawH * 0.15, drawW, drawH);
-    } else if (p.state === "vault") {
-      const k = Math.min(1, p.st / VAULT_T);
-      ctx.translate(0, -20);
-      ctx.rotate(-0.5 + k * 1.8);
-      ctx.scale(1.05, 0.92);
-      ctx.drawImage(img, -drawW * 0.5, -drawH * 0.7, drawW, drawH);
-    } else if (p.state === "climb") {
-      const k = Math.min(1, p.st / CLIMB_T);
-      ctx.translate(0, -10);
-      ctx.rotate(-0.2 + Math.sin(k * Math.PI) * 0.25);
-      ctx.drawImage(img, -drawW * 0.5, -drawH, drawW, drawH);
-    } else if (p.state === "jump" || p.state === "fall") {
-      const stretch = p.state === "jump" ? 1.1 : 0.94;
-      ctx.scale(0.95, stretch);
-      ctx.rotate(p.state === "jump" ? -0.14 : 0.16);
-      ctx.drawImage(img, -drawW * 0.5, -drawH, drawW, drawH);
-    } else if (p.state === "stumble" || p.state === "dead") {
-      ctx.rotate(p.state === "dead" ? 0.9 : Math.sin(p.st * 30) * 0.12);
-      ctx.globalAlpha = p.state === "dead" ? 0.85 : 1;
-      ctx.drawImage(img, -drawW * 0.5, -drawH, drawW, drawH);
+    if (rig) {
+      const pose = poseFromState(p);
+      if (p.state === "dead") ctx.globalAlpha = 0.85;
+      drawArticulated(ctx, rig, pose, drawH);
     } else {
-      // run cycle
-      const ph = p.phase;
-      const bob = Math.abs(Math.sin(ph)) * 9;
-      const squash = 1 - 0.08 * Math.cos(ph * 2);
-      ctx.translate(0, -bob);
-      ctx.rotate(-0.08);
-      ctx.scale(1, squash);
-      const uh = drawH * waist;
-      ctx.drawImage(img, 0, 0, iw, ih * waist, -drawW * 0.5, -drawH, drawW, uh);
-      ctx.save();
-      ctx.translate(0, -drawH + uh);
-      ctx.rotate(Math.sin(ph) * 0.2);
-      ctx.drawImage(img, 0, ih * waist, iw, ih * (1 - waist), -drawW * 0.5, 0, drawW, drawH * (1 - waist));
-      ctx.restore();
+      // fallback: still sprite, no rig yet
+      ctx.drawImage(img, -drawW * 0.5, -drawH, drawW, drawH);
     }
     ctx.restore();
 
     // motion trails at high speed
-    if (speed > 700 && p.state === "run") {
+    if (speed > 700 && p.state === "run" && img) {
       ctx.globalAlpha = 0.15;
       ctx.drawImage(img, x - drawW * 0.5 - 18, feet - drawH, drawW, drawH);
       ctx.globalAlpha = 0.08;
@@ -1574,6 +2284,7 @@
       stepPlayer(dt);
       stepChaser(dt);
       stepParts(dt);
+      stepCam(dt);
       cullWorld(camX());
       $("hScore").textContent = String(Math.floor(score));
       $("hMeters").textContent = String(Math.floor(ranMeters));
@@ -1656,6 +2367,7 @@
   bootUI();
   show("load");
   loadAssets().then(() => {
+    buildAllRigs();
     $("sBest").textContent = String(best);
     show("start");
     lastTs = 0;
@@ -1681,5 +2393,10 @@
     retry,
     die,
     chars: CHARS,
+    rigs,
+    setPhase(v){ if (player) player.phase = v; },
+    setState(s){ if (player) player.state = s; },
+    draw,
+    poseRun,
   };
 })();
